@@ -1,0 +1,116 @@
+name: ironlog
+description: Advanced strength training and workout programming app
+version: 1.0.0+1
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+
+  # Navigation
+  go_router: ^13.0.1
+
+  # Local Database
+  drift: ^2.14.1
+  drift_flutter: ^0.1.0
+  sqlite3_flutter_libs: ^0.5.20
+
+  # Network
+  dio: ^5.4.0
+  retrofit: ^4.1.0
+
+  # Authentication
+  google_sign_in: ^6.2.1
+  sign_in_with_apple: ^6.1.0
+  flutter_secure_storage: ^9.0.0
+
+  # Charts
+  fl_chart: ^0.66.2
+
+  # Ads
+  google_mobile_ads: ^4.0.0
+
+  # Subscriptions
+  purchases_flutter: ^6.16.1  # RevenueCat
+
+  # Health Integration
+  health: ^10.2.0
+
+  # UI/UX
+  animations: ^2.0.11
+  flutter_animate: ^4.5.0
+  lottie: ^3.0.0
+  cached_network_image: ^3.3.1
+  shimmer: ^3.0.0
+
+  # Utilities
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.8.1
+  equatable: ^2.0.5
+  dartz: ^0.10.1
+  get_it: ^7.6.7
+  injectable: ^2.3.2
+  shared_preferences: ^2.2.2
+  connectivity_plus: ^6.0.2
+  uuid: ^4.3.3
+  intl: ^0.19.0
+  path_provider: ^2.1.2
+  permission_handler: ^11.3.0
+  local_auth: ^2.1.8
+  share_plus: ^7.2.2
+  url_launcher: ^6.2.5
+  package_info_plus: ^5.0.1
+  device_info_plus: ^10.1.0
+  wakelock_plus: ^1.2.2   # Keep screen on during workout
+  vibration: ^1.8.4
+  audioplayers: ^6.0.0
+  timezone: ^0.9.3
+  flutter_local_notifications: ^17.0.0
+
+  # Image
+  image_picker: ^1.0.7
+  flutter_image_compress: ^2.1.0
+
+  # CSV/Export
+  csv: ^6.0.0
+  pdf: ^3.10.8
+  printing: ^5.12.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.8
+  drift_dev: ^2.14.1
+  freezed: ^2.4.6
+  json_serializable: ^6.7.1
+  retrofit_generator: ^8.1.0
+  riverpod_generator: ^2.3.9
+  injectable_generator: ^2.4.1
+  mockito: ^5.4.4
+  mocktail: ^1.0.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/animations/
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
