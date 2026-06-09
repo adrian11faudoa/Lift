@@ -1,0 +1,110 @@
+# docker-compose.dev.yml
+# Local development environment mirroring AWS production services.
+# Run: docker compose -f docker-compose.dev.yml up -d
+# Then: cd backend && npm run start:dev
+
+version: '3.9'
+
+services:
+  # ── PostgreSQL 16 (mirrors RDS) ──────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ironlog_postgres_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ironlog
+      POSTGRES_PASSWORD: ironlog
+      POSTGRES_DB:       ironlog
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./backend/prisma/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ironlog"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── Redis 7 (mirrors ElastiCache) ───────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ironlog_redis_dev
+    restart: unless-stopped
+    command: redis-server --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+  # ── MinIO (mirrors S3 for local development) ─────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: ironlog_minio_dev
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ironlog
+      MINIO_ROOT_PASSWORD: ironlog_secret
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # Web console (http://localhost:9001)
+    volumes:
+      - minio_dev_data:/data
+
+  # ── MinIO bucket setup ────────────────────────────────────────
+  minio_setup:
+    image: minio/mc:latest
+    container_name: ironlog_minio_setup
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ironlog ironlog_secret;
+        mc mb local/ironlog-dev-media    --ignore-existing;
+        mc mb local/ironlog-dev-backups  --ignore-existing;
+        mc mb local/ironlog-dev-assets   --ignore-existing;
+        echo 'MinIO buckets created';
+      "
+
+  # ── MailHog (catches outbound emails in dev) ─────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: ironlog_mailhog_dev
+    restart: unless-stopped
+    ports:
+      - "1025:1025"    # SMTP
+      - "8025:8025"    # Web UI (http://localhost:8025)
+
+  # ── Adminer (PostgreSQL web UI) ──────────────────────────────
+  adminer:
+    image: adminer:latest
+    container_name: ironlog_adminer_dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"    # http://localhost:8080
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      - postgres
+
+  # ── RedisInsight (Redis web UI) ──────────────────────────────
+  redis_insight:
+    image: redis/redisinsight:latest
+    container_name: ironlog_redis_insight
+    restart: unless-stopped
+    ports:
+      - "5540:5540"    # http://localhost:5540
+    depends_on:
+      - redis
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+  minio_dev_data:

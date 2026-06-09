@@ -1,0 +1,478 @@
+name: IronLog — Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main          # Production deploy
+      - staging       # Staging deploy
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+# Cancel in-progress runs on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION:         us-east-1
+  ECR_REPOSITORY:     ironlog-api
+  ECS_CLUSTER_PROD:   ironlog-prod
+  ECS_CLUSTER_STAGING:ironlog-staging
+  ECS_SERVICE_PROD:   ironlog-api
+  ECS_SERVICE_STAGING:ironlog-api
+  CONTAINER_NAME:     ironlog-api
+
+jobs:
+  # ─────────────────────────────────────────────────────────
+  # 1. BACKEND TESTS
+  # ─────────────────────────────────────────────────────────
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER:     ironlog_test
+          POSTGRES_PASSWORD: ironlog_test
+          POSTGRES_DB:       ironlog_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test -- --coverage --passWithNoTests
+        env:
+          NODE_ENV:    test
+          DB_HOST:     localhost
+          DB_PORT:     5432
+          DB_USER:     ironlog_test
+          DB_PASSWORD: ironlog_test
+          DB_NAME:     ironlog_test
+          REDIS_HOST:  localhost
+          REDIS_PORT:  6379
+          JWT_SECRET:  test_jwt_secret_at_least_32_chars_long
+          JWT_REFRESH_SECRET: test_refresh_secret_32_chars_long
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          directory: backend/coverage
+          flags: backend
+
+  # ─────────────────────────────────────────────────────────
+  # 2. FLUTTER TESTS
+  # ─────────────────────────────────────────────────────────
+  test-flutter:
+    name: Flutter Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run code generation
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test --coverage
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          directory: frontend/coverage
+          flags: flutter
+
+  # ─────────────────────────────────────────────────────────
+  # 3. SECURITY SCAN
+  # ─────────────────────────────────────────────────────────
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy (filesystem scan)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'backend'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Run npm audit
+        working-directory: backend
+        run: npm audit --audit-level=high
+
+  # ─────────────────────────────────────────────────────────
+  # 4. BUILD & PUSH DOCKER IMAGE
+  # ─────────────────────────────────────────────────────────
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-flutter, security-scan]
+    if: github.event_name == 'push'
+
+    outputs:
+      image_tag:       ${{ steps.meta.outputs.image_tag }}
+      image_uri:       ${{ steps.build.outputs.image_uri }}
+      ecr_registry:    ${{ steps.login-ecr.outputs.registry }}
+
+    permissions:
+      id-token: write    # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC — no static keys!)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+          role-session-name: github-actions-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::8}"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          if [[ "$GITHUB_REF_NAME" == "main" ]]; then
+            TAG="prod-${SHORT_SHA}"
+          else
+            TAG="staging-${SHORT_SHA}"
+          fi
+          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context:    backend
+          push:       true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.ref_name == 'main' && 'prod-latest' || 'staging-latest' }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      - name: Scan pushed image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }}
+          severity:  CRITICAL
+          exit-code: '1'
+
+  # ─────────────────────────────────────────────────────────
+  # 5. DEPLOY TO STAGING
+  # ─────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref_name == 'staging'
+    environment:
+      name: staging
+      url: https://staging-api.ironlog.app
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ironlog-api-task \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update image in task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name:  ${{ env.CONTAINER_NAME }}
+          image:           ${{ needs.build-push.outputs.ecr_registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.build-push.outputs.image_tag }}
+
+      - name: Deploy to ECS Staging
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:        ${{ steps.task-def.outputs.task-definition }}
+          service:                ${{ env.ECS_SERVICE_STAGING }}
+          cluster:                ${{ env.ECS_CLUSTER_STAGING }}
+          wait-for-service-stability: true
+          wait-for-minutes:       10
+
+      - name: Run smoke tests against staging
+        run: |
+          sleep 30
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging-api.ironlog.app/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Smoke test failed! Status: $STATUS"
+            exit 1
+          fi
+          echo "Staging smoke test passed (HTTP $STATUS)"
+
+  # ─────────────────────────────────────────────────────────
+  # 6. DEPLOY TO PRODUCTION
+  # ─────────────────────────────────────────────────────────
+  deploy-production:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref_name == 'main'
+    environment:
+      name: production
+      url:  https://api.ironlog.app
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ironlog-api-task \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update image in task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name:  ${{ env.CONTAINER_NAME }}
+          image:           ${{ needs.build-push.outputs.ecr_registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.build-push.outputs.image_tag }}
+
+      - name: Deploy to ECS Production
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:            ${{ steps.task-def.outputs.task-definition }}
+          service:                    ${{ env.ECS_SERVICE_PROD }}
+          cluster:                    ${{ env.ECS_CLUSTER_PROD }}
+          wait-for-service-stability: true
+          wait-for-minutes:           15
+
+      - name: Production smoke test
+        run: |
+          sleep 30
+          # Health check
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.ironlog.app/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "PRODUCTION SMOKE TEST FAILED! Status: $STATUS"
+            exit 1
+          fi
+          echo "Production smoke test passed (HTTP $STATUS)"
+
+      - name: Create GitHub deployment
+        uses: chrnorm/deployment-action@v2
+        with:
+          token:       ${{ secrets.GITHUB_TOKEN }}
+          environment: production
+          description: "Deployed ${{ needs.build-push.outputs.image_tag }} to production"
+
+  # ─────────────────────────────────────────────────────────
+  # 7. DEPLOY FLUTTER WEB TO S3 + CLOUDFRONT
+  # ─────────────────────────────────────────────────────────
+  deploy-flutter-web:
+    name: Deploy Flutter Web → S3/CloudFront
+    runs-on: ubuntu-latest
+    needs: [test-flutter, deploy-production]
+    if: github.ref_name == 'main'
+    environment:
+      name: production
+      url:  https://app.ironlog.app
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        working-directory: frontend
+        run: flutter pub get
+
+      - name: Build Flutter web (with WASM for better performance)
+        working-directory: frontend
+        run: |
+          flutter pub run build_runner build --delete-conflicting-outputs
+          flutter build web \
+            --release \
+            --web-renderer canvaskit \
+            --dart-define=API_BASE_URL=https://api.ironlog.app \
+            --dart-define=REVENUECAT_IOS_KEY=${{ secrets.REVENUECAT_IOS_KEY }} \
+            --dart-define=REVENUECAT_ANDROID_KEY=${{ secrets.REVENUECAT_ANDROID_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3
+        working-directory: frontend
+        run: |
+          # Upload with long cache for versioned assets (Flutter hashes them)
+          aws s3 sync build/web/ s3://ironlog-prod-assets/ \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html" \
+            --exclude "*.json" \
+            --exclude "*.txt" \
+            --exclude "*.ico"
+
+          # Upload index.html and manifests without caching (always fresh)
+          aws s3 cp build/web/index.html s3://ironlog-prod-assets/ \
+            --cache-control "no-cache, no-store, must-revalidate"
+          aws s3 sync build/web/ s3://ironlog-prod-assets/ \
+            --exclude "*" \
+            --include "*.json" \
+            --include "*.txt" \
+            --include "*.ico" \
+            --cache-control "public, max-age=3600"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/index.html" "/flutter_service_worker.js" "/manifest.json"
+
+      - name: Flutter web smoke test
+        run: |
+          sleep 15
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://app.ironlog.app)
+          echo "Flutter web HTTP status: $STATUS"
+          if [ "$STATUS" != "200" ]; then exit 1; fi
+
+  # ─────────────────────────────────────────────────────────
+  # 8. NOTIFY ON FAILURE
+  # ─────────────────────────────────────────────────────────
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-flutter, build-push, deploy-production, deploy-flutter-web]
+    if: failure() && github.ref_name == 'main'
+
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 IronLog production deploy FAILED",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *Production Deploy Failed*\nCommit: `${{ github.sha }}`\nBy: ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

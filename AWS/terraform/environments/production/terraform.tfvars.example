@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────
+# terraform/environments/production/terraform.tfvars.example
+# Copy to terraform.tfvars and fill in real values.
+# NEVER commit terraform.tfvars to version control.
+# ─────────────────────────────────────────────────────────────
+
+# AWS configuration
+aws_region   = "us-east-1"
+db_username  = "ironlog"
+
+# ACM SSL Certificate ARNs
+# - Request via AWS Console or: aws acm request-certificate --domain-name "*.ironlog.app" --validation-method DNS --region us-east-1
+# - Both certificates should cover *.ironlog.app (wildcard)
+acm_certificate_arn           = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE-WITH-REAL-ARN"
+acm_certificate_arn_us_east_1 = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE-WITH-REAL-ARN"
+
+# Domain names (must match your ACM certificate)
+api_domain_name = "api.ironlog.app"
+app_domain_name = "app.ironlog.app"
+
+# Docker image tag to deploy (set by CI/CD, override for manual deploys)
+image_tag = "prod-latest"
+
+# GitHub (for OIDC federated access — no static AWS keys in CI/CD)
+github_org  = "your-github-username-or-org"
+github_repo = "ironlog"
+
+# Team contact for AWS resource tagging
+team_email = "infra@ironlog.app"

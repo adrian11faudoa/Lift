@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────
+# IronLog .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# ── Secrets (NEVER commit these) ─────────────────────────────
+.env
+.env.local
+.env.*.local
+*.tfvars
+!*.tfvars.example
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.pem
+*.key
+*.p8
+*.p12
+GoogleService-Info.plist
+google-services.json
+
+# ── Terraform ─────────────────────────────────────────────────
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/.terraform.lock.hcl
+**/tfplan
+**/terraform-outputs.json
+**/plan_output.txt
+
+# ── Node.js / NestJS ──────────────────────────────────────────
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+.nyc_output/
+
+# ── Flutter / Dart ────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.freezed.dart
+*.g.dart
+*.gr.dart
+
+# ── iOS ───────────────────────────────────────────────────────
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Runner/GeneratedPluginRegistrant.m
+*.xcworkspace
+*.xcuserdata
+DerivedData/
+*.ipa
+
+# ── Android ───────────────────────────────────────────────────
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+android/app/release/
+
+# ── Docker ────────────────────────────────────────────────────
+postgres_data/
+redis_data/
+minio_data/
+
+# ── IDE ───────────────────────────────────────────────────────
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── AWS ───────────────────────────────────────────────────────
+.aws/credentials
+rotator.zip
+
+# ── Generated ─────────────────────────────────────────────────
+swagger.json
